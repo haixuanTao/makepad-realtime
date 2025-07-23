@@ -452,8 +452,7 @@ impl App {
         }
 
         // Create WebSocket connection
-        let url =
-            "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03".to_string();
+        let url = "ws://localhost:8123".to_string();
 
         let mut request = HttpRequest::new(url, HttpMethod::GET);
         request.set_header(
@@ -485,15 +484,8 @@ impl App {
             match message {
                 WebSocketMessage::Opened => {
                     log!("WebSocket connected to OpenAI");
-                    self.is_connected = true;
-                    self.ui
-                        .label(id!(connection_status))
-                        .set_text(cx, "✅ Connected to OpenAI");
-                    self.initialize_session(cx);
-                    self.update_ui_state(cx);
                 }
                 WebSocketMessage::String(data) => {
-                    log!("Received WebSocket message: {}", data);
                     self.handle_openai_message(cx, &data);
                 }
                 WebSocketMessage::Binary(data) => {
@@ -620,14 +612,23 @@ impl App {
                     }
                     OpenAIRealtimeResponse::ResponseDone { .. } => {
                         log!("OpenAI response completed");
-                        self.ui
-                            .label(id!(status_label))
-                            .set_text(cx, "✅ Response completed - listening again");
 
+                        while self
+                            .is_playing
+                            .try_lock()
+                            .map_or(true, |is_playing| *is_playing)
+                        {
+                            // Wait for playback to finish
+                            self.ui
+                                .label(id!(status_label))
+                                .set_text(cx, "Playing audio");
+                        }
                         self.user_is_interrupting = false;
                         self.ai_is_responding = false;
                         self.current_assistant_item_id = None;
-
+                        self.ui
+                            .label(id!(status_label))
+                            .set_text(cx, "✅ Response completed - listening again");
                         // Resume recording after AI response is complete
                         if self.conversation_active {
                             *self.is_recording.lock().unwrap() = true;
@@ -710,7 +711,7 @@ impl App {
         if let Some(websocket) = &mut self.websocket {
             match serde_json::to_string(&message) {
                 Ok(json_str) => {
-                    log!("Sending to OpenAI: {}", json_str);
+                    // log!("Sending to OpenAI: {}", json_str);
                     if let Err(_) = websocket.send_string(json_str) {
                         log!("Failed to send message to OpenAI");
                     }
