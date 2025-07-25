@@ -212,10 +212,21 @@ live_design! {
                         draw_text: {text_style: {font_size: 16}}
                     }
 
-                    button_connect = <Button> {
-                        text: "🔗 Connect to OpenAI"
+
+                    button_connect_funasr = <Button> {
+                        text: "🔗 Connect to FunASR"
                         draw_text: {text_style: {font_size: 18}}
                     }
+
+                    button_connect_whisper = <Button> {
+                        text: "🔗 Connect to Finetuned Whisper"
+                        draw_text: {text_style: {font_size: 18}}
+                    }
+
+                    // button_connect_kyutai = <Button> {
+                        // text: "🔗 Connect to Kyutai "
+                        // draw_text: {text_style: {font_size: 18}}
+                    // }
 
                     button_start_conversation = <Button> {
                         text: "🎤 Start Conversation"
@@ -299,8 +310,15 @@ impl MatchEvent for App {
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
-        if self.ui.button(id!(button_connect)).clicked(&actions) {
-            self.connect_to_openai(cx);
+        if self.ui.button(id!(button_connect_funasr)).clicked(&actions) {
+            self.connect_to_openai(cx, "moyoyo-funasr");
+        }
+        if self
+            .ui
+            .button(id!(button_connect_whisper))
+            .clicked(&actions)
+        {
+            self.connect_to_openai(cx, "moyoyo-whisper");
         }
 
         if self
@@ -443,22 +461,11 @@ impl App {
         self.audio_setup_done = true;
     }
 
-    fn connect_to_openai(&mut self, cx: &mut Cx) {
-        if self.openai_api_key.is_none() {
-            self.ui
-                .label(id!(connection_status))
-                .set_text(cx, "❌ Please set OPENAI_API_KEY");
-            return;
-        }
-
+    fn connect_to_openai(&mut self, cx: &mut Cx, dataflow: &str) {
         // Create WebSocket connection
         let url = "ws://localhost:8123".to_string();
 
         let mut request = HttpRequest::new(url, HttpMethod::GET);
-        request.set_header(
-            "Authorization".to_string(),
-            format!("Bearer {}", self.openai_api_key.as_ref().unwrap()),
-        );
         request.set_header("OpenAI-Beta".to_string(), "realtime=v1".to_string());
 
         self.websocket = Some(WebSocket::open(request));
@@ -466,6 +473,7 @@ impl App {
             .label(id!(connection_status))
             .set_text(cx, "🔄 Connecting...");
 
+        self.initialize_session(cx, dataflow);
         log!("WebSocket connection initiated");
     }
 
@@ -484,6 +492,7 @@ impl App {
             match message {
                 WebSocketMessage::Opened => {
                     log!("WebSocket connected to OpenAI");
+                    self.is_connected = true;
                 }
                 WebSocketMessage::String(data) => {
                     self.handle_openai_message(cx, &data);
@@ -513,7 +522,7 @@ impl App {
     }
 
     /// Initialize the OpenAI Realtime session with audio configuration
-    fn initialize_session(&mut self, _cx: &mut Cx) {
+    fn initialize_session(&mut self, _cx: &mut Cx, dataflow: &str) {
         log!("Initializing OpenAI session");
 
         let session_config = SessionConfig {
@@ -524,7 +533,7 @@ impl App {
             input_audio_format: "pcm16".to_string(),
             output_audio_format: "pcm16".to_string(),
             input_audio_transcription: Some(TranscriptionConfig {
-                model: "whisper-1".to_string(),
+                model: dataflow.to_string(),
             }),
             turn_detection: Some(TurnDetectionConfig {
                 detection_type: "server_vad".to_string(), // Server-side VAD. Turns are detected by the server.
@@ -619,6 +628,7 @@ impl App {
                             .map_or(true, |is_playing| *is_playing)
                         {
                             // Wait for playback to finish
+                            std::thread::sleep(std::time::Duration::from_millis(10));
                             self.ui
                                 .label(id!(status_label))
                                 .set_text(cx, "Playing audio");
