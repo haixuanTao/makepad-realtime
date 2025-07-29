@@ -12,9 +12,6 @@ use std::sync::{Arc, Mutex};
 // - Server-side VAD (Voice Activity Detection) for turn management
 // - Audio interruption handling to prevent feedback loops
 // - Full duplex audio: simultaneous recording and playback
-//
-// The implementation follows OpenAI's message format specification exactly,
-// making it suitable as a reference for other providers implementing compatible APIs.
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
@@ -49,11 +46,18 @@ pub struct SessionConfig {
     pub input_audio_format: String,
     pub output_audio_format: String,
     pub input_audio_transcription: Option<TranscriptionConfig>,
+    pub input_audio_noise_reduction: Option<NoiseReductionConfig>,
     pub turn_detection: Option<TurnDetectionConfig>,
     pub tools: Vec<serde_json::Value>,
     pub tool_choice: String,
     pub temperature: f32,
     pub max_response_output_tokens: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct NoiseReductionConfig {
+    #[serde(rename = "type")]
+    pub noise_reduction_type: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -89,28 +93,16 @@ pub struct ConversationItem {
     pub id: Option<String>,
     #[serde(rename = "type")]
     pub item_type: String,
-    pub status: Option<String>,
     pub role: String,
     pub content: Vec<ContentPart>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
-pub enum ContentPart {
-    #[serde(rename = "input_text")]
-    InputText { text: String },
-    #[serde(rename = "input_audio")]
-    InputAudio {
-        audio: String,
-        transcript: Option<String>,
-    },
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(rename = "audio")]
-    Audio {
-        audio: String,
-        transcript: Option<String>,
-    },
+pub struct ContentPart {
+    #[serde(rename = "type")]
+    pub part_type: String,
+    pub text: Option<String>,
 }
 
 // Incoming message types from OpenAI
@@ -185,15 +177,67 @@ live_design! {
     use link::shaders::*;
     use link::widgets::*;
 
+    TranscriptionModelSelector = <View> {
+        height: Fit
+        align: {x: 0.5, y: 0.5}
+
+        <Label> {
+            text: "Select transcription model"
+            draw_text: {text_style: {font_size: 15}}
+        }
+
+        transcription_model_selector = <DropDown> {
+            margin: 5
+            labels: ["whisper", "moyoyo-whisper", "moyoyo-funasr"]
+            values: [whisper, moyoyo_whisper, moyoyo_funasr]
+
+            draw_text: {
+                text_style: {font_size: 15}
+            }
+
+            popup_menu = {
+                draw_text: {
+                    text_style: {font_size: 15}
+                }
+            }
+        }
+    }
+
+    VoiceSelector = <View> {
+        height: Fit
+        align: {x: 0.5, y: 0.5}
+
+        <Label> {
+            text: "Select voice (OpenAI only, can't change once conversation starts)"
+            draw_text: {text_style: {font_size: 15}}
+        }
+
+        voice_selector = <DropDown> {
+            margin: 5
+            labels: ["alloy", "shimmer", "ash", "ballad", "coral", "echo", "sage", "verse"]
+            values: [alloy, shimmer, ash, ballad, coral, echo, sage, verse]
+
+            draw_text: {
+                text_style: {font_size: 15}
+            }
+
+            popup_menu = {
+                draw_text: {
+                    text_style: {font_size: 15}
+                }
+            }
+        }
+    }
+
     App = {{App}} {
         ui: <Root>{
             main_window = <Window>{
                 body = <View>{
-                    flow: Down,
-                    spacing: 30,
+                    flow: Down, spacing: 20
+                    padding: {top: 20}
                     align: {
                         x: 0.5,
-                        y: 0.5
+                        y: 0.0
                     },
                     show_bg: true,
                     draw_bg: {
@@ -203,51 +247,61 @@ live_design! {
                     }
 
                     <Label> {
-                        text: "OpenAI Realtime Audio Chat"
+                        text: "Realtime Audio Chat"
                         draw_text: {text_style: {font_size: 24}}
                     }
 
-                    connection_status = <Label> {
-                        text: "Disconnected"
-                        draw_text: {text_style: {font_size: 16}}
+                    <TranscriptionModelSelector> {}
+                    voice_selector_wrapper = <VoiceSelector> {} // Disabling for now as it cannot be changed during conversation.
+                    selected_voice_view = <View> {
+                        visible: false
+                        height: Fit
+                        align: {x: 0.5, y: 0.5}
+                        selected_voice = <Label> { draw_text: {text_style: {font_size: 15}}}
                     }
 
+                    <View> {
+                        height: Fit
+                        align: {x: 0.5, y: 0.5}
+                        spacing: 20
 
-                    button_connect_funasr = <Button> {
-                        text: "🔗 Connect to FunASR"
-                        draw_text: {text_style: {font_size: 18}}
+                        button_connect = <Button> {
+                            text: "🔗 Connect and start conversation"
+                            draw_text: {text_style: {font_size: 15}}
+                        }
+
+                        connection_status = <Label> {
+                            text: "Disconnected"
+                            draw_text: {text_style: {font_size: 15}}
+                        }
                     }
 
-                    button_connect_whisper = <Button> {
-                        text: "🔗 Connect to Finetuned Whisper"
-                        draw_text: {text_style: {font_size: 18}}
-                    }
-
-                    // button_connect_kyutai = <Button> {
-                        // text: "🔗 Connect to Kyutai "
-                        // draw_text: {text_style: {font_size: 18}}
-                    // }
-
-                    button_start_conversation = <Button> {
-                        text: "🎤 Start Conversation"
-                        draw_text: {text_style: {font_size: 18}}
-                    }
-
-                    button_stop_conversation = <Button> {
-                        text: "⏹️ Stop Conversation"
-                        draw_text: {text_style: {font_size: 18}}
+                    toggle_interruptions = <Toggle> {
+                        text: "Allow interruptions (requires headphones, no AEC yet)"
+                        draw_text: {text_style: {font_size: 13}}
+                        label_walk: {
+                            margin: {left: 50}
+                        }
+                        draw_bg: {
+                            size: 25.
+                        }
                     }
 
                     transcript_label = <Label> {
                         width: Fill,
                         padding: {left: 30, right: 30}
-                        height: 200
-                        draw_text: {text_style: {font_size: 14}}
+                        height: 300
+                        draw_text: {text_style: {font_size: 15}}
                     }
 
                     status_label = <Label> {
                         text: "Ready to connect"
-                        draw_text: {text_style: {font_size: 16}}
+                        draw_text: {text_style: {font_size: 15}}
+                    }
+
+                    reset_button = <Button> {
+                        text: "🔄 Reset"
+                        draw_text: {text_style: {font_size: 15}}
                     }
                 }
             }
@@ -293,6 +347,8 @@ pub struct App {
     user_is_interrupting: bool,
     #[rust]
     current_assistant_item_id: Option<String>,
+    #[rust]
+    selected_voice: String,
 }
 
 impl LiveRegister for App {
@@ -310,31 +366,30 @@ impl MatchEvent for App {
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
-        if self.ui.button(id!(button_connect_funasr)).clicked(&actions) {
-            self.connect_to_openai(cx, "moyoyo-funasr");
-        }
-        if self
-            .ui
-            .button(id!(button_connect_whisper))
-            .clicked(&actions)
-        {
-            self.connect_to_openai(cx, "moyoyo-whisper");
+        if self.ui.button(id!(button_connect)).clicked(&actions) {
+            self.connect_to_openai(cx);
         }
 
-        if self
-            .ui
-            .button(id!(button_start_conversation))
-            .clicked(&actions)
-        {
-            self.start_conversation(cx);
+        if self.ui.button(id!(reset_button)).clicked(&actions) {
+            self.reset_all(cx);
         }
 
-        if self
+        if let Some(enabled) = self
             .ui
-            .button(id!(button_stop_conversation))
-            .clicked(&actions)
+            .check_box(id!(toggle_interruptions))
+            .changed(&actions)
         {
-            self.stop_conversation(cx);
+            if enabled {
+                *self.is_recording.lock().unwrap() = true;
+            }
+        }
+
+        if let Some(_value) = self
+            .ui
+            .drop_down(id!(transcription_model_selector))
+            .changed(&actions)
+        {
+            self.update_session_config(cx);
         }
     }
 
@@ -366,6 +421,32 @@ impl AppMain for App {
                 if audio_timer.is_event(event).is_some() {
                     if self.conversation_active {
                         self.send_audio_chunk_to_openai(cx);
+                    }
+
+                    // Check if we should resume recording when playback buffer is empty
+                    // This is the backup mechanism for when toggle is OFF (no interruptions)
+                    if self.playback_audio.lock().unwrap().is_empty() {
+                        let interruptions_enabled =
+                            self.ui.check_box(id!(toggle_interruptions)).active(cx);
+
+                        if !interruptions_enabled {
+                            // Only auto-resume recording if interruptions are disabled
+                            // (when interruptions are enabled, recording control is handled elsewhere)
+                            if let Ok(mut is_recording) = self.is_recording.try_lock() {
+                                if !*is_recording
+                                    && self.conversation_active
+                                    && !self.ai_is_responding
+                                {
+                                    println!(
+                                        "Auto-resuming recording - playback empty and interruptions disabled"
+                                    );
+                                    *is_recording = true;
+                                    self.ui
+                                        .label(id!(status_label))
+                                        .set_text(cx, "🎤 Listening...");
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -416,7 +497,7 @@ impl App {
             // Always start with silence
             output_buffer.zero();
 
-            if let Ok(playback) = playback_audio.try_lock() {
+            if let Ok(mut playback) = playback_audio.try_lock() {
                 if let Ok(mut pos) = playback_position.try_lock() {
                     if let Ok(mut playing) = is_playing.try_lock() {
                         // Check if we should continue playing
@@ -424,6 +505,8 @@ impl App {
                             // Write to all output channels (mono -> stereo if needed)
                             let frame_count = output_buffer.frame_count();
                             let channel_count = output_buffer.channel_count();
+
+                            let mut samples_to_drain = 0;
 
                             for frame_idx in 0..frame_count {
                                 // Upsample from 24kHz to 48kHz by duplicating each sample
@@ -439,12 +522,28 @@ impl App {
                                     }
 
                                     *pos += 1;
+
+                                    // Track how many samples we can safely remove (every 2 pos increments = 1 sample)
+                                    if *pos % 2 == 0 {
+                                        samples_to_drain += 1;
+                                    }
                                 } else {
                                     // Reached end of audio data
                                     *playing = false;
                                     *pos = 0;
+                                    // Drain remaining samples since we're done
+                                    samples_to_drain = playback.len();
                                     break;
                                 }
+                            }
+
+                            // Remove consumed samples from the front of the buffer
+                            if samples_to_drain > 0 && samples_to_drain <= playback.len() {
+                                playback.drain(..samples_to_drain);
+                                // Adjust position since we removed samples from the front
+                                *pos = (*pos).saturating_sub(samples_to_drain * 2);
+                                // log!("Drained {} samples, buffer size now: {}, pos: {}",
+                                //         samples_to_drain, playback.len(), *pos);
                             }
                         } else {
                             // Not playing or no data - ensure we output silence
@@ -461,11 +560,22 @@ impl App {
         self.audio_setup_done = true;
     }
 
-    fn connect_to_openai(&mut self, cx: &mut Cx, dataflow: &str) {
+    fn connect_to_openai(&mut self, cx: &mut Cx) {
+        if self.openai_api_key.is_none() {
+            self.ui
+                .label(id!(connection_status))
+                .set_text(cx, "❌ Please set OPENAI_API_KEY");
+            return;
+        }
+
         // Create WebSocket connection
-        let url = "ws://localhost:8123".to_string();
+        let url = "ws://127.0.0.1:8123".to_string();
 
         let mut request = HttpRequest::new(url, HttpMethod::GET);
+        request.set_header(
+            "Authorization".to_string(),
+            format!("Bearer {}", self.openai_api_key.as_ref().unwrap()),
+        );
         request.set_header("OpenAI-Beta".to_string(), "realtime=v1".to_string());
 
         self.websocket = Some(WebSocket::open(request));
@@ -473,7 +583,7 @@ impl App {
             .label(id!(connection_status))
             .set_text(cx, "🔄 Connecting...");
 
-        self.initialize_session(cx, dataflow);
+        self.update_session_config(cx);
         log!("WebSocket connection initiated");
     }
 
@@ -490,11 +600,8 @@ impl App {
         // Process messages
         for message in messages {
             match message {
-                WebSocketMessage::Opened => {
-                    log!("WebSocket connected to OpenAI");
-                    self.is_connected = true;
-                }
                 WebSocketMessage::String(data) => {
+                    log!("Received WebSocket message: {}", data);
                     self.handle_openai_message(cx, &data);
                 }
                 WebSocketMessage::Binary(data) => {
@@ -502,11 +609,6 @@ impl App {
                 }
                 WebSocketMessage::Error(error) => {
                     log!("WebSocket error: {}", error);
-                    self.ui
-                        .label(id!(connection_status))
-                        .set_text(cx, &format!("❌ Error: {}", error));
-                    self.is_connected = false;
-                    self.update_ui_state(cx);
                 }
                 WebSocketMessage::Closed => {
                     log!("WebSocket closed");
@@ -517,29 +619,41 @@ impl App {
                     self.conversation_active = false;
                     self.update_ui_state(cx);
                 }
+                _ => {}
             }
         }
     }
 
-    /// Initialize the OpenAI Realtime session with audio configuration
-    fn initialize_session(&mut self, _cx: &mut Cx, dataflow: &str) {
-        log!("Initializing OpenAI session");
+    /// Update the OpenAI Realtime session with audio configuration
+    fn update_session_config(&mut self, cx: &mut Cx) {
+        self.selected_voice = self.ui.drop_down(id!(voice_selector)).selected_label();
+        self.ui
+            .view(id!(voice_selector_wrapper))
+            .set_visible(cx, false);
+        self.ui.view(id!(selected_voice_view)).set_visible(cx, true);
+        self.ui.label(id!(selected_voice)).set_text(
+            cx,
+            format!("Selected voice: {}", self.selected_voice).as_str(),
+        );
 
         let session_config = SessionConfig {
             modalities: vec!["text".to_string(), "audio".to_string()],
-            instructions: "You are a helpful AI assistant. Respond naturally and conversationally."
+            instructions: "You are a helpful AI assistant. Respond naturally and conversationally. Always respond in the same language as the user."
                 .to_string(),
-            voice: "alloy".to_string(),
+            voice: self.selected_voice.clone(),
             input_audio_format: "pcm16".to_string(),
             output_audio_format: "pcm16".to_string(),
             input_audio_transcription: Some(TranscriptionConfig {
-                model: dataflow.to_string(),
+                model: self.ui.drop_down(id!(transcription_model_selector)).selected_label()
+            }),
+            input_audio_noise_reduction: Some(NoiseReductionConfig {
+                noise_reduction_type: "far_field".to_string(), // TODO: do this programmatically based on microphone type
             }),
             turn_detection: Some(TurnDetectionConfig {
                 detection_type: "server_vad".to_string(), // Server-side VAD. Turns are detected by the server.
-                threshold: 0.8,
+                threshold: 0.5,
                 prefix_padding_ms: 300,
-                silence_duration_ms: 500,
+                silence_duration_ms: 200,
                 interrupt_response: true,
                 create_response: true,
             }),
@@ -570,7 +684,9 @@ impl App {
                         self.ui
                             .label(id!(connection_status))
                             .set_text(cx, "✅ Connected to OpenAI");
+                        self.update_session_config(cx);
                         self.update_ui_state(cx);
+                        self.start_conversation(cx);
                     }
                     OpenAIRealtimeResponse::SessionUpdated { .. } => {
                         log!("OpenAI session updated successfully");
@@ -591,13 +707,26 @@ impl App {
 
                         self.ai_is_responding = true;
                         if self.conversation_active {
-                            *self.is_recording.lock().unwrap() = false;
+                            let interruptions_enabled =
+                                self.ui.check_box(id!(toggle_interruptions)).active(cx);
+
+                            if !interruptions_enabled {
+                                // Interruptions disabled - mute microphone during AI speech
+                                *self.is_recording.lock().unwrap() = false;
+                            } else {
+                                // Interruptions enabled - ensure recording is active for real-time interruption
+                                *self.is_recording.lock().unwrap() = true;
+                            }
                         }
 
                         // Decode base64 audio and add to playback buffer
                         if let Ok(audio_bytes) = general_purpose::STANDARD.decode(&delta) {
                             self.add_audio_to_playback(audio_bytes);
                         }
+
+                        self.ui
+                            .label(id!(status_label))
+                            .set_text(cx, "🔊 Playing audio...");
                     }
                     OpenAIRealtimeResponse::ResponseAudioTranscriptDelta { delta, .. } => {
                         self.ai_is_responding = true;
@@ -620,35 +749,44 @@ impl App {
                             .set_text(cx, &self.current_transcript);
                     }
                     OpenAIRealtimeResponse::ResponseDone { .. } => {
-                        log!("OpenAI response completed");
-
-                        while self
-                            .is_playing
-                            .try_lock()
-                            .map_or(true, |is_playing| *is_playing)
-                        {
-                            // Wait for playback to finish
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                            self.ui
-                                .label(id!(status_label))
-                                .set_text(cx, "Playing audio");
-                        }
+                        let status_label = self.ui.label(id!(status_label));
                         self.user_is_interrupting = false;
                         self.ai_is_responding = false;
                         self.current_assistant_item_id = None;
-                        self.ui
-                            .label(id!(status_label))
-                            .set_text(cx, "✅ Response completed - listening again");
+
                         // Resume recording after AI response is complete
                         if self.conversation_active {
-                            *self.is_recording.lock().unwrap() = true;
+                            // Check if interruptions are enabled via the toggle
+                            let interruptions_enabled =
+                                self.ui.check_box(id!(toggle_interruptions)).active(cx);
+
+                            if interruptions_enabled {
+                                // Allow immediate interruption
+                                *self.is_recording.lock().unwrap() = true;
+                                status_label
+                                    .set_text(cx, "✅ Response generated - 🎤 listening...");
+                            } else {
+                                // Without interruptions, only resume when playback buffer is truly empty
+                                if self.playback_audio.lock().unwrap().is_empty() {
+                                    println!(
+                                        "Setting is_recording to true - response completed and playback empty"
+                                    );
+                                    *self.is_recording.lock().unwrap() = true;
+                                    status_label
+                                        .set_text(cx, "✅ Response generated - 🎤 listening...");
+                                } else {
+                                    status_label
+                                        .set_text(cx, "✅ Response generated - 🔊 playing audio");
+                                    println!("Playback still active, keeping recording disabled");
+                                }
+                            }
                         }
                     }
                     OpenAIRealtimeResponse::InputAudioBufferSpeechStarted { .. } => {
                         log!("Speech detected by OpenAI - interrupting AI audio");
                         self.ui
                             .label(id!(status_label))
-                            .set_text(cx, "🎤 Speech detected - interrupting AI");
+                            .set_text(cx, "🎤 User speech detected");
 
                         // CRITICAL: Clear the playback audio buffer to stop ongoing AI audio
                         // This prevents audio accumulation and feedback loops
@@ -707,7 +845,7 @@ impl App {
                         }
                     }
                     _ => {
-                        log!("Received other OpenAI message type");
+                        log!("Received other OpenAI message type: {:?}", data);
                     }
                 }
             }
@@ -754,13 +892,34 @@ impl App {
         *self.playback_position.lock().unwrap() = 0;
         self.current_transcript.clear();
 
-        self.ui
-            .label(id!(status_label))
-            .set_text(cx, "🎤 Listening...");
         self.update_ui_state(cx);
 
         // Start streaming audio immediately
         self.start_audio_streaming(cx);
+    }
+
+    fn reset_all(&mut self, cx: &mut Cx) {
+        self.stop_conversation(cx);
+
+        self.is_connected = false;
+        self.has_sent_audio = false;
+        self.current_transcript.clear();
+        self.ui
+            .label(id!(status_label))
+            .set_text(cx, "Ready to connect");
+        self.ui.label(id!(transcript_label)).set_text(cx, "");
+
+        self.ui
+            .view(id!(voice_selector_wrapper))
+            .set_visible(cx, true);
+        self.ui
+            .view(id!(selected_voice_view))
+            .set_visible(cx, false);
+
+        self.update_ui_state(cx);
+
+        // Close the websocket connection
+        self.websocket.as_mut().unwrap().close();
     }
 
     fn stop_conversation(&mut self, cx: &mut Cx) {
@@ -775,17 +934,14 @@ impl App {
             self.audio_streaming_timer = None;
         }
 
-        // Send final audio chunk and commit if we have sent audio
-        self.send_audio_chunk_to_openai(cx);
-        if self.has_sent_audio {
-            let commit_message = OpenAIRealtimeMessage::InputAudioBufferCommit;
-            self.send_openai_message(commit_message);
+        // Cancel any pending audio playback
+        if let Ok(mut playback) = self.playback_audio.try_lock() {
+            playback.clear();
         }
 
         self.ui
             .label(id!(status_label))
             .set_text(cx, "⏹️ Conversation stopped");
-        self.update_ui_state(cx);
     }
 
     fn start_audio_streaming(&mut self, cx: &mut Cx) {
@@ -860,7 +1016,7 @@ impl App {
                         samples.len()
                     );
                 } else {
-                    log!("Appending to existing playback ({} samples)", samples.len());
+                    // log!("Appending to existing playback ({} samples)", samples.len());
                 }
             }
 
@@ -885,33 +1041,15 @@ impl App {
         if !self.is_connected {
             self.ui
                 .button(id!(button_connect))
-                .set_text(cx, "🔗 Connect to OpenAI");
-            self.ui
-                .button(id!(button_start_conversation))
-                .set_text(cx, "🎤 Start Conversation (Disconnected)");
-            self.ui
-                .button(id!(button_stop_conversation))
-                .set_text(cx, "⏹️ Stop Conversation");
+                .set_text(cx, "🔗 Connect and start conversation");
         } else if self.conversation_active {
             self.ui
                 .button(id!(button_connect))
                 .set_text(cx, "✅ Connected");
-            self.ui
-                .button(id!(button_start_conversation))
-                .set_text(cx, "🎤 Conversation Active");
-            self.ui
-                .button(id!(button_stop_conversation))
-                .set_text(cx, "⏹️ Stop Conversation");
         } else {
             self.ui
                 .button(id!(button_connect))
                 .set_text(cx, "✅ Connected");
-            self.ui
-                .button(id!(button_start_conversation))
-                .set_text(cx, "🎤 Start Conversation");
-            self.ui
-                .button(id!(button_stop_conversation))
-                .set_text(cx, "⏹️ Stop Conversation");
         }
     }
 }
