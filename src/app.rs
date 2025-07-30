@@ -713,6 +713,7 @@ impl App {
                             if !interruptions_enabled {
                                 // Interruptions disabled - mute microphone during AI speech
                                 *self.is_recording.lock().unwrap() = false;
+                                self.recorded_audio.lock().unwrap().clear();
                             } else {
                                 // Interruptions enabled - ensure recording is active for real-time interruption
                                 *self.is_recording.lock().unwrap() = true;
@@ -771,6 +772,7 @@ impl App {
                                     println!(
                                         "Setting is_recording to true - response completed and playback empty"
                                     );
+                                    self.recorded_audio.lock().unwrap().clear();
                                     *self.is_recording.lock().unwrap() = true;
                                     status_label
                                         .set_text(cx, "✅ Response generated - 🎤 listening...");
